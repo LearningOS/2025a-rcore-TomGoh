@@ -1,8 +1,8 @@
 //! Process management syscalls
 use crate::{
-    task::{exit_current_and_run_next, suspend_current_and_run_next},
-    timer::get_time_us,
+    syscall::{SYSCALL_AUDIT_ARRAY, SYSCALL_ID_ARRAY}, task::{exit_current_and_run_next, suspend_current_and_run_next}, timer::get_time_us
 };
+
 
 #[repr(C)]
 #[derive(Debug)]
@@ -38,8 +38,42 @@ pub fn sys_get_time(ts: *mut TimeVal, _tz: usize) -> isize {
     0
 }
 
-// TODO: implement the syscall
-pub fn sys_trace(_trace_request: usize, _id: usize, _data: usize) -> isize {
+/// trace a syscall
+pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
     trace!("kernel: sys_trace");
-    -1
+    
+    match trace_request {
+        0 => {
+            // Read one byte from address id and return its value
+            let addr: *const u8 = id as *const u8;
+            unsafe { *addr as isize }
+        }
+        1 => {
+            // Write the lowest byte of data to address id
+            let addr: *mut u8 = id as *mut u8;
+            let byte_to_write = (data & 0xFF) as u8;
+            unsafe {
+                *addr = byte_to_write;
+            }
+            0
+        }
+        2 => {
+            // get the count by the syscall id
+            // Note: this call to sys_trace itself is already counted by the main syscall function
+            let mut ans: isize = -1;
+            {
+                let array = &SYSCALL_AUDIT_ARRAY.exclusive_access().array;
+                for i in 0..SYSCALL_ID_ARRAY.len() {
+                    if array[i].id == id {
+                        ans = array[i].count;
+                        break;
+                    }
+                }
+            }
+            ans
+        }
+        _ => {
+            return -1;
+        }
+    }
 }
