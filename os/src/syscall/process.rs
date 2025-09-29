@@ -1,6 +1,6 @@
 //! Process management syscalls
 use crate::{
-    syscall::{SYSCALL_AUDIT_ARRAY, SYSCALL_ID_ARRAY}, task::{exit_current_and_run_next, suspend_current_and_run_next}, timer::get_time_us
+    task::{exit_current_and_run_next, suspend_current_and_run_next}, timer::get_time_us
 };
 
 
@@ -58,19 +58,8 @@ pub fn sys_trace(trace_request: usize, id: usize, data: usize) -> isize {
             0
         }
         2 => {
-            // get the count by the syscall id
-            // Note: this call to sys_trace itself is already counted by the main syscall function
-            let mut ans: isize = -1;
-            {
-                let array = &SYSCALL_AUDIT_ARRAY.exclusive_access().array;
-                for i in 0..SYSCALL_ID_ARRAY.len() {
-                    if array[i].id == id {
-                        ans = array[i].count;
-                        break;
-                    }
-                }
-            }
-            ans
+            // get the count by the syscall id for current task
+            crate::task::get_current_task_syscall_count(id)
         }
         _ => {
             return -1;
