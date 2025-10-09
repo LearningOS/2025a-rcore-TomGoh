@@ -1,0 +1,9 @@
+Test sequence:
+1. mmap(0x10000000, 4096, 3) -> maps VPN 0x10000
+2. mmap(0x10001000, 8192, 3) -> maps VPN 0x10001, 0x10002
+3. munmap(0x10000000, 4096) -> should unmap VPN 0x10000
+
+start=0x10000000, len=4096
+start_vpn = floor(0x10000000) = VPN(0x10000)
+end_vpn = ceil(0x10001000) = VPN(0x10001)
+Range: [0x10000, 0x10001) -> only VPN 0x10000

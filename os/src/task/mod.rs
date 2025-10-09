@@ -15,6 +15,7 @@ mod switch;
 mod task;
 
 use crate::loader::{get_app_data, get_num_app};
+use crate::mm::{MapPermission, VirtAddr};
 use crate::sync::UPSafeCell;
 use crate::trap::TrapContext;
 use alloc::vec::Vec;
@@ -153,6 +154,19 @@ impl TaskManager {
             panic!("All applications completed!");
         }
     }
+
+    /// Audit the issued syscall of a task, by incrementing its count in the syscall_counter map according to the syscall_id.
+    pub fn audit_task_syscall(&self, syscall_id: usize) {
+        let mut inner = self.inner.exclusive_access();
+        let cur = inner.current_task;
+        inner.tasks[cur].audit_syscall(syscall_id);
+    }
+
+    /// Get the count of a specific syscall issued by the current task.
+    pub fn get_task_syscall_count(&self, syscall_id: usize) -> usize {
+        let inner = self.inner.exclusive_access();
+        inner.tasks[inner.current_task].get_syscall_count(syscall_id)
+    }
 }
 
 /// Run the first task in task list.
@@ -201,4 +215,28 @@ pub fn current_trap_cx() -> &'static mut TrapContext {
 /// Change the current 'Running' task's program break
 pub fn change_program_brk(size: i32) -> Option<usize> {
     TASK_MANAGER.change_current_program_brk(size)
+}
+
+/// A wrapper function of `audit_task_syscall` in `TaskManager`
+pub fn audit_current_syscall(syscall_id: usize) {
+    TASK_MANAGER.audit_task_syscall(syscall_id);
+}
+
+/// A wrapper function of `get_task_syscall_count` in `TaskManager`
+pub fn get_task_syscall_count( syscall_id: usize) -> usize {
+    TASK_MANAGER.get_task_syscall_count(syscall_id)
+}
+
+/// Mmap a region for the current task
+pub fn current_task_mmap(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> Result<(), ()> {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let cur = inner.current_task;
+    inner.tasks[cur].memory_set.mmap(start_va, end_va, permission)
+}
+
+/// Munmap a region for the current task
+pub fn current_task_munmap(start_va: VirtAddr, end_va: VirtAddr) -> Result<(), ()> {
+    let mut inner = TASK_MANAGER.inner.exclusive_access();
+    let cur = inner.current_task;
+    inner.tasks[cur].memory_set.munmap(start_va, end_va)
 }

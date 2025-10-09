@@ -155,6 +155,15 @@ impl PageTable {
     pub fn token(&self) -> usize {
         8usize << 60 | self.root_ppn.0
     }
+
+    /// check whether the virtual address has the permission perm
+    pub fn check_permission(&self, va: VirtAddr, perm: PTEFlags) -> bool {
+        if let Some(pte) = self.find_pte(va.floor()) {
+            pte.is_valid() && (pte.flags() & perm) == perm
+        } else {
+            false
+        }
+    }
 }
 
 /// Translate&Copy a ptr[u8] array with LENGTH len to a mutable u8 Vec through page table

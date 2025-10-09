@@ -1,4 +1,6 @@
 //! Types related to task management
+use alloc::collections::btree_map::BTreeMap;
+
 use super::TaskContext;
 use crate::config::TRAP_CONTEXT_BASE;
 use crate::mm::{
@@ -28,6 +30,9 @@ pub struct TaskControlBlock {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Syscall Issue Counter
+    pub syscall_counter: BTreeMap<usize, usize>,
 }
 
 impl TaskControlBlock {
@@ -63,6 +68,7 @@ impl TaskControlBlock {
             base_size: user_sp,
             heap_bottom: user_sp,
             program_brk: user_sp,
+            syscall_counter: BTreeMap::new(),
         };
         // prepare TrapContext in user space
         let trap_cx = task_control_block.get_trap_cx();
@@ -95,6 +101,17 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+
+    /// Audit the issued syscall of a task, by incrementing its count in the syscall_counter map according to the syscall_id.
+    pub fn audit_syscall(&mut self, syscall_id: usize) {
+        let count = self.syscall_counter.entry(syscall_id).or_insert(0);
+        *count += 1;
+    }
+
+    /// Get the count of a specific syscall issued by this task.
+    pub fn get_syscall_count(&self, syscall_id: usize) -> usize {
+        *self.syscall_counter.get(&syscall_id).unwrap_or(&0)
     }
 }
 
