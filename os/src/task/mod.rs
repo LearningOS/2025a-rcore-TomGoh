@@ -21,7 +21,7 @@ mod switch;
 #[allow(clippy::module_inception)]
 mod task;
 
-use crate::loader::get_app_data_by_name;
+use crate::{loader::get_app_data_by_name, mm::{MapPermission, VirtAddr}};
 use alloc::sync::Arc;
 use lazy_static::*;
 pub use manager::{fetch_task, TaskManager};
@@ -114,4 +114,18 @@ lazy_static! {
 ///Add init process to the manager
 pub fn add_initproc() {
     add_task(INITPROC.clone());
+}
+
+/// Mmap a region for the current task
+pub fn current_task_mmap(start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> Result<(), ()> {
+    let binding = current_task().unwrap();
+    let mut inner = binding.inner_exclusive_access();
+    inner.memory_set.mmap(start_va, end_va, permission)
+}
+
+/// Munmap a region for the current task
+pub fn current_task_munmap(start_va: VirtAddr, end_va: VirtAddr) -> Result<(), ()> {
+    let binding = current_task().unwrap();
+    let mut inner = binding.inner_exclusive_access();
+    inner.memory_set.munmap(start_va, end_va)
 }

@@ -34,6 +34,7 @@ lazy_static! {
 pub struct MemorySet {
     page_table: PageTable,
     areas: Vec<MapArea>,
+    mmap_manager: MmapManager,
 }
 
 impl MemorySet {
@@ -42,6 +43,7 @@ impl MemorySet {
         Self {
             page_table: PageTable::new(),
             areas: Vec::new(),
+            mmap_manager: MmapManager::new(),
         }
     }
     /// Get the page table token
@@ -300,6 +302,16 @@ impl MemorySet {
             false
         }
     }
+
+        /// Mmap a region using the MmapManager
+    pub fn mmap(&mut self, start_va: VirtAddr, end_va: VirtAddr, permission: MapPermission) -> Result<(), ()> {
+        self.mmap_manager.mmap(&mut self.page_table, start_va, end_va, permission)
+    }
+
+    /// Munmap a region using the MmapManager
+    pub fn munmap(&mut self, start_va: VirtAddr, end_va: VirtAddr) -> Result<(), ()> {
+        self.mmap_manager.munmap(&mut self.page_table, start_va, end_va)
+    }
 }
 /// map area structure, controls a contiguous piece of virtual memory
 pub struct MapArea {
@@ -446,4 +458,82 @@ pub fn remap_test() {
         .unwrap()
         .executable(),);
     println!("remap_test passed!");
+}
+
+/// Manager for mmap/munmap operations per task
+pub struct MmapManager {
+    mapped_areas: BTreeMap<VirtAddr, MapArea>,
+}
+
+impl MmapManager {
+    /// Create a new empty MmapManager
+    pub fn new() -> Self {
+        Self {
+            mapped_areas: BTreeMap::new(),
+        }
+    }
+
+    /// Check if a region overlaps with any existing mapped areas
+    fn check_overlap(&self, start_va: VirtAddr, end_va: VirtAddr) -> bool {
+        let start_vpn = start_va.floor();
+        let end_vpn = end_va.ceil();
+
+        for (_, area) in self.mapped_areas.iter() {
+            let area_start = area.vpn_range.get_start();
+            let area_end = area.vpn_range.get_end();
+
+            // Check if ranges overlap
+            if !(end_vpn.0 <= area_start.0 || start_vpn.0 >= area_end.0) {
+                return true;
+            }
+        }
+        false
+    }
+
+    /// Map a new region
+    pub fn mmap(
+        &mut self,
+        page_table: &mut PageTable,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+        permission: MapPermission,
+    ) -> Result<(), ()> {
+        // Check for overlaps
+        if self.check_overlap(start_va, end_va) {
+            return Err(());
+        }
+
+        // Create and map the area
+        let mut map_area = MapArea::new(start_va, end_va, MapType::Framed, permission);
+        map_area.map(page_table);
+
+        // Store the mapped area
+        self.mapped_areas.insert(start_va, map_area);
+        Ok(())
+    }
+
+    /// Unmap a region
+    pub fn munmap(
+        &mut self,
+        page_table: &mut PageTable,
+        start_va: VirtAddr,
+        end_va: VirtAddr,
+    ) -> Result<(), ()> {
+        // Find the exact area that was mapped
+        if let Some(mut map_area) = self.mapped_areas.remove(&start_va) {
+            // Verify the end matches
+            let expected_end: VirtAddr = map_area.vpn_range.get_end().into();
+            if expected_end != end_va {
+                // Restore the area if end doesn't match
+                self.mapped_areas.insert(start_va, map_area);
+                return Err(());
+            }
+
+            // Unmap the area
+            map_area.unmap(page_table);
+            Ok(())
+        } else {
+            Err(())
+        }
+    }
 }
