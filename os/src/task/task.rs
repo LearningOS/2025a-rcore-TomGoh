@@ -8,6 +8,11 @@ use crate::trap::{trap_handler, TrapContext};
 use alloc::sync::{Arc, Weak};
 use alloc::vec::Vec;
 use core::cell::RefMut;
+use core::cmp::Ordering;
+
+const DEFAULT_PRIORITY: isize = 16;
+const DEFAULT_STRIDE: isize = 0;
+const DEFAULT_PASS: isize = 100;
 
 /// Task control block structure
 ///
@@ -68,6 +73,15 @@ pub struct TaskControlBlockInner {
 
     /// Program break
     pub program_brk: usize,
+
+    /// Current Live Stride
+    pub stride: isize,
+
+    /// Priority
+    pub priority: isize,
+
+    /// Current Pass
+    pub pass: isize,
 }
 
 impl TaskControlBlockInner {
@@ -118,6 +132,9 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: user_sp,
                     program_brk: user_sp,
+                    stride: DEFAULT_STRIDE,
+                    priority: DEFAULT_PRIORITY,
+                    pass: DEFAULT_PASS,
                 })
             },
         };
@@ -191,6 +208,9 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    stride: parent_inner.stride,
+                    priority: parent_inner.priority,
+                    pass: parent_inner.pass,
                 })
             },
         });
@@ -232,6 +252,9 @@ impl TaskControlBlock {
                     exit_code: 0,
                     heap_bottom: parent_inner.heap_bottom,
                     program_brk: parent_inner.program_brk,
+                    stride: DEFAULT_STRIDE,
+                    pass: DEFAULT_PASS,
+                    priority: DEFAULT_PRIORITY,
                 })
             },
         });
@@ -281,6 +304,28 @@ impl TaskControlBlock {
         } else {
             None
         }
+    }
+}
+
+impl PartialEq for TaskControlBlock {
+    fn eq(&self, other: &Self) -> bool {
+        self.pid.0 == other.pid.0
+    }
+}
+
+impl Eq for TaskControlBlock {}
+
+impl Ord for TaskControlBlock {
+    fn cmp(&self, other: &Self) -> Ordering {
+        let self_stride = self.inner_exclusive_access().stride;
+        let other_stride = other.inner_exclusive_access().stride;
+        self_stride.cmp(&other_stride).reverse()
+    }
+}
+
+impl PartialOrd for TaskControlBlock {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
     }
 }
 
