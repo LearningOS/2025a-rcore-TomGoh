@@ -5,7 +5,8 @@
 //! `UPSafeCell<OSInodeInner>` -> `OSInode`: for static `ROOT_INODE`,we
 //! need to wrap `OSInodeInner` into `UPSafeCell`
 use super::File;
-use crate::drivers::BLOCK_DEVICE;
+use crate::fs::StatMode;
+use crate::{drivers::BLOCK_DEVICE, fs::Stat};
 use crate::mm::UserBuffer;
 use crate::sync::UPSafeCell;
 use alloc::sync::Arc;
@@ -155,5 +156,44 @@ impl File for OSInode {
             total_write_size += write_size;
         }
         total_write_size
+    }
+    fn fstat(&self) -> Stat {
+        let inner = self.inner.exclusive_access();
+        let (ino, type_, nlink) = inner.inode.stat();
+        Stat {
+            dev: 0,
+            ino,
+            mode: if type_ == easy_fs::DiskInodeType::Directory {
+                StatMode::DIR
+            } else {
+                StatMode::FILE
+            },
+            nlink,
+            pad: [0; 7],
+        }
+    }
+}
+
+/// link old_path to new_path
+pub fn link(old_path: &str, new_path: &str) -> Option<()> {
+    let old_inode = ROOT_INODE.find(old_path)?;
+    if ROOT_INODE.find(new_path).is_some() {
+        return None;
+    }
+    ROOT_INODE.link(new_path, &old_inode)
+}
+
+/// unlink a file
+pub fn unlink(path: &str) -> isize {
+    let parent_inode = ROOT_INODE.clone();
+    if let Some(file_inode) = parent_inode.find(path) {
+        if parent_inode.remove_dirent(path).is_some() {
+            file_inode.unlink();
+            0
+        } else {
+            -1
+        }
+    } else {
+        -1
     }
 }

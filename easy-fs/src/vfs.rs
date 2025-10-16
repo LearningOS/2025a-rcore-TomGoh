@@ -1,3 +1,5 @@
+use crate::BLOCK_SZ;
+
 use super::{
     block_cache_sync_all, get_block_cache, BlockDevice, DirEntry, DiskInode, DiskInodeType,
     EasyFileSystem, DIRENT_SZ,
@@ -41,6 +43,16 @@ impl Inode {
             .lock()
             .modify(self.block_offset, f)
     }
+
+    fn inode_id(&self) -> u32 {
+        let fs = self.fs.lock();
+        let (block_id, block_offset) = (self.block_id, self.block_offset);
+        let inode_size = core::mem::size_of::<DiskInode>();
+        let inode_per_block = (BLOCK_SZ / inode_size) as u32;
+        let inode_area_start_block = fs.inode_area_start_block;
+        (block_id as u32 - inode_area_start_block) * inode_per_block + (block_offset / inode_size) as u32
+    }
+
     /// Find inode under a disk inode by name
     fn find_inode_id(&self, name: &str, disk_inode: &DiskInode) -> Option<u32> {
         // assert it is a directory
@@ -182,5 +194,96 @@ impl Inode {
             }
         });
         block_cache_sync_all();
+    }
+
+    /// Remove a directory entry from this directory inode.
+    pub fn remove_dirent(&self, name: &str) -> Option<()> {
+        assert!(self.read_disk_inode(|d| d.is_dir()));
+        let mut dirent_offset = None;
+        let file_count = self.read_disk_inode(|d| (d.size as usize) / DIRENT_SZ);
+
+        // Find the directory entry to remove
+        let mut dirent = DirEntry::empty();
+        for i in 0..file_count {
+            self.read_disk_inode(|d| {
+                assert_eq!(
+                    d.read_at(i * DIRENT_SZ, dirent.as_bytes_mut(), &self.block_device),
+                    DIRENT_SZ
+                );
+            });
+            if dirent.name() == name {
+                dirent_offset = Some(i * DIRENT_SZ);
+                break;
+            }
+        }
+        let dirent_offset = dirent_offset?;
+
+        // Read the last directory entry
+        let mut last_dirent = DirEntry::empty();
+        self.read_disk_inode(|d| {
+            assert_eq!(
+                d.read_at((file_count - 1) * DIRENT_SZ, last_dirent.as_bytes_mut(), &self.block_device),
+                DIRENT_SZ
+            );
+        });
+
+        // Overwrite the target entry with the last entry
+        self.modify_disk_inode(|d| {
+            d.write_at(dirent_offset, last_dirent.as_bytes(), &self.block_device);
+            // Shrink directory size by one entry
+            d.size -= DIRENT_SZ as u32;
+        });
+
+        Some(())
+    }
+    
+    /// Create a hard link from `self` to `other` with name `name`
+    pub fn link(&self, name: &str, other: &Self) -> Option<()> {
+        let mut fs = self.fs.lock();
+        assert!(self.read_disk_inode(|d| d.is_dir()));
+
+        if self.find(name).is_some() {
+            return None;
+        }
+
+        self.modify_disk_inode(|root_inode| {
+            let file_count = root_inode.size as usize / DIRENT_SZ;
+            let new_size = (file_count + 1 ) * DIRENT_SZ;
+            self.increase_size(new_size as u32, root_inode, &mut fs);
+            let new_dirent = DirEntry::new(name, other.inode_id());
+            root_inode.write_at(file_count * DIRENT_SZ, new_dirent .as_bytes(), &self.block_device);
+        });
+
+        other.modify_disk_inode(|other_node| {
+            other_node.nlink += 1;
+        });
+        block_cache_sync_all();
+        Some(())
+    }
+
+    /// Unlink current inode, dealloc data blocks if nlink reaches 0
+    pub fn unlink(&self) -> usize {
+        let mut fs = self.fs.lock();
+        let data_blocks_dealloc = self.modify_disk_inode(|inode| {
+            assert!(inode.nlink > 0);
+            inode.nlink -= 1;
+            if inode.nlink == 0 {
+                inode.clear_size(&self.block_device)
+            } else {
+                Vec::new()
+            }
+        });
+        for block in data_blocks_dealloc.into_iter() {
+            fs.dealloc_data(block);
+        }
+        block_cache_sync_all();
+        0
+    }
+
+    /// Get (inode id, inode type, nlink) of current inode
+    pub fn stat(&self) -> (u64, DiskInodeType, u32) {
+        self.read_disk_inode(|disk_inode| {
+            (self.inode_id() as u64, disk_inode.type_.clone(), disk_inode.nlink)
+        })
     }
 }
