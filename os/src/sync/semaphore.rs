@@ -1,13 +1,13 @@
-//! Semaphore
-
 use crate::sync::UPSafeCell;
 use crate::task::{block_current_and_run_next, current_task, wakeup_task, TaskControlBlock};
-use alloc::{collections::VecDeque, sync::Arc};
+use alloc::collections::VecDeque;
+use alloc::sync::Arc;
 
-/// semaphore structure
+/// A semaphore synchronization primitive
 pub struct Semaphore {
-    /// semaphore inner
+    /// The inner state of the semaphore
     pub inner: UPSafeCell<SemaphoreInner>,
+    max_value: usize,
 }
 
 pub struct SemaphoreInner {
@@ -16,9 +16,8 @@ pub struct SemaphoreInner {
 }
 
 impl Semaphore {
-    /// Create a new semaphore
+    /// Create a new semaphore with the given resource count
     pub fn new(res_count: usize) -> Self {
-        trace!("kernel: Semaphore::new");
         Self {
             inner: unsafe {
                 UPSafeCell::new(SemaphoreInner {
@@ -26,12 +25,12 @@ impl Semaphore {
                     wait_queue: VecDeque::new(),
                 })
             },
+            max_value: res_count,
         }
     }
 
-    /// up operation of semaphore
+    /// Increment the semaphore count (V operation)
     pub fn up(&self) {
-        trace!("kernel: Semaphore::up");
         let mut inner = self.inner.exclusive_access();
         inner.count += 1;
         if inner.count <= 0 {
@@ -41,9 +40,8 @@ impl Semaphore {
         }
     }
 
-    /// down operation of semaphore
+    /// Decrement the semaphore count (P operation), blocking if necessary
     pub fn down(&self) {
-        trace!("kernel: Semaphore::down");
         let mut inner = self.inner.exclusive_access();
         inner.count -= 1;
         if inner.count < 0 {
@@ -51,5 +49,20 @@ impl Semaphore {
             drop(inner);
             block_current_and_run_next();
         }
+    }
+
+    /// Get the current value of the semaphore
+    pub fn current_value(&self) -> usize {
+        let inner = self.inner.exclusive_access();
+        if inner.count > 0 {
+            inner.count as usize
+        } else {
+            0
+        }
+    }
+
+    /// Get the maximum value of the semaphore
+    pub fn max_value(&self) -> usize {
+        self.max_value
     }
 }

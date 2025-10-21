@@ -2,6 +2,7 @@ use crate::sync::{Condvar, Mutex, MutexBlocking, MutexSpin, Semaphore};
 use crate::task::{block_current_and_run_next, current_process, current_task};
 use crate::timer::{add_timer, get_time_ms};
 use alloc::sync::Arc;
+use alloc::vec::Vec;
 /// sleep syscall
 pub fn sys_sleep(ms: usize) -> isize {
     trace!(
@@ -70,6 +71,18 @@ pub fn sys_mutex_lock(mutex_id: usize) -> isize {
     );
     let process = current_process();
     let process_inner = process.inner_exclusive_access();
+    if process_inner.deadlock_detect {
+        let tid = current_task()
+            .unwrap()
+            .inner_exclusive_access()
+            .res
+            .as_ref()
+            .unwrap()
+            .tid;
+        if crate::task::deadlock::detect_deadlock_mutex(&process_inner, tid, mutex_id) {
+            return -0xDEAD;
+        }
+    }
     let mutex = Arc::clone(process_inner.mutex_list[mutex_id].as_ref().unwrap());
     drop(process_inner);
     drop(process);
@@ -143,7 +156,29 @@ pub fn sys_semaphore_up(sem_id: usize) -> isize {
             .tid
     );
     let process = current_process();
-    let process_inner = process.inner_exclusive_access();
+    let mut process_inner = process.inner_exclusive_access();
+
+    // Update allocation before releasing the semaphore
+    let tid = current_task()
+        .unwrap()
+        .inner_exclusive_access()
+        .res
+        .as_ref()
+        .unwrap()
+        .tid;
+
+    // Ensure allocation matrix has enough space
+    while process_inner.semaphore_allocation.len() <= tid {
+        process_inner.semaphore_allocation.push(Vec::new());
+    }
+    while process_inner.semaphore_allocation[tid].len() <= sem_id {
+        process_inner.semaphore_allocation[tid].push(0);
+    }
+
+    if process_inner.semaphore_allocation[tid][sem_id] > 0 {
+        process_inner.semaphore_allocation[tid][sem_id] -= 1;
+    }
+
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
     drop(process_inner);
     sem.up();
@@ -163,10 +198,44 @@ pub fn sys_semaphore_down(sem_id: usize) -> isize {
             .tid
     );
     let process = current_process();
-    let process_inner = process.inner_exclusive_access();
+    let mut process_inner = process.inner_exclusive_access();
+    if process_inner.deadlock_detect {
+        let tid = current_task()
+            .unwrap()
+            .inner_exclusive_access()
+            .res
+            .as_ref()
+            .unwrap()
+            .tid;
+        if crate::task::deadlock::detect_deadlock_semaphore(&process_inner, tid, sem_id) {
+            return -0xDEAD;
+        }
+    }
     let sem = Arc::clone(process_inner.semaphore_list[sem_id].as_ref().unwrap());
+
+    // Ensure allocation matrix has enough space
+    let tid = current_task()
+        .unwrap()
+        .inner_exclusive_access()
+        .res
+        .as_ref()
+        .unwrap()
+        .tid;
+    while process_inner.semaphore_allocation.len() <= tid {
+        process_inner.semaphore_allocation.push(Vec::new());
+    }
+    while process_inner.semaphore_allocation[tid].len() <= sem_id {
+        process_inner.semaphore_allocation[tid].push(0);
+    }
+
     drop(process_inner);
     sem.down();
+
+    // Update allocation after successfully acquiring the semaphore
+    let mut process_inner = process.inner_exclusive_access();
+    process_inner.semaphore_allocation[tid][sem_id] += 1;
+    drop(process_inner);
+
     0
 }
 /// condvar create syscall
@@ -242,10 +311,18 @@ pub fn sys_condvar_wait(condvar_id: usize, mutex_id: usize) -> isize {
     condvar.wait(mutex);
     0
 }
+
+
 /// enable deadlock detection syscall
-///
-/// YOUR JOB: Implement deadlock detection, but might not all in this syscall
-pub fn sys_enable_deadlock_detect(_enabled: usize) -> isize {
-    trace!("kernel: sys_enable_deadlock_detect NOT IMPLEMENTED");
-    -1
+pub fn sys_enable_deadlock_detect(is_enable: i32) -> isize {
+    let process = current_process();
+    let mut process_inner = process.inner_exclusive_access();
+    if is_enable == 1 {
+        process_inner.deadlock_detect = true;
+    } else if is_enable == 0 {
+        process_inner.deadlock_detect = false;
+    } else {
+        return -1; // Invalid argument
+    }
+    0
 }
